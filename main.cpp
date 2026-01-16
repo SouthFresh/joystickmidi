@@ -21,6 +21,9 @@
     #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
     #endif
+    #ifndef NOMINMAX
+    #define NOMINMAX
+    #endif
     #define _WIN32_WINNT 0x0601
     #include <windows.h>
     #include <hidsdi.h>
@@ -67,13 +70,12 @@ struct ControlInfo {
 #endif
 };
 
-struct MidiMappingConfig {
-    std::string hidDevicePath;
-    std::string hidDeviceName;
+enum class MidiMessageType { NONE, NOTE_ON_OFF, CC };
+
+struct ControlMapping {
     ControlInfo control;
-    std::string midiDeviceName;
-    enum class MidiMessageType { NONE, NOTE_ON_OFF, CC } midiMessageType = MidiMessageType::NONE;
-    int midiChannel = 0;
+    MidiMessageType midiMessageType = MidiMessageType::NONE;
+    int midiChannel = -1;  // -1 means use default channel
     int midiNoteOrCCNumber = 0;
     int midiValueNoteOnVelocity = 64;
     int midiValueCCOn = 127;
@@ -82,14 +84,22 @@ struct MidiMappingConfig {
     LONG calibrationMaxHid = 0;
     bool calibrationDone = false;
     bool reverseAxis = false;
+};
+
+struct MidiMappingConfig {
+    std::string hidDevicePath;
+    std::string hidDeviceName;
+    std::string midiDeviceName;
+    int defaultMidiChannel = 0;
     int midiSendIntervalMs = 1;
+    std::vector<ControlMapping> mappings;
 };
 
 // --- JSON Serialization ---
-NLOHMANN_JSON_SERIALIZE_ENUM(MidiMappingConfig::MidiMessageType, {
-    {MidiMappingConfig::MidiMessageType::NONE, nullptr},
-    {MidiMappingConfig::MidiMessageType::NOTE_ON_OFF, "NoteOnOff"},
-    {MidiMappingConfig::MidiMessageType::CC, "CC"}
+NLOHMANN_JSON_SERIALIZE_ENUM(MidiMessageType, {
+    {MidiMessageType::NONE, nullptr},
+    {MidiMessageType::NOTE_ON_OFF, "NoteOnOff"},
+    {MidiMessageType::CC, "CC"}
 })
 
 void to_json(json& j, const ControlInfo& ctrl) {
@@ -120,47 +130,88 @@ void from_json(const json& j, ControlInfo& ctrl) {
 #endif
 }
 
+void to_json(json& j, const ControlMapping& mapping) {
+    j = json{
+        {"control", mapping.control},
+        {"midiMessageType", mapping.midiMessageType},
+        {"midiChannel", mapping.midiChannel},
+        {"midiNoteOrCCNumber", mapping.midiNoteOrCCNumber},
+        {"midiValueNoteOnVelocity", mapping.midiValueNoteOnVelocity},
+        {"midiValueCCOn", mapping.midiValueCCOn},
+        {"midiValueCCOff", mapping.midiValueCCOff},
+        {"calibrationMinHid", mapping.calibrationMinHid},
+        {"calibrationMaxHid", mapping.calibrationMaxHid},
+        {"calibrationDone", mapping.calibrationDone},
+        {"reverseAxis", mapping.reverseAxis}
+    };
+}
+
+void from_json(const json& j, ControlMapping& mapping) {
+    j.at("control").get_to(mapping.control);
+    j.at("midiMessageType").get_to(mapping.midiMessageType);
+    mapping.midiChannel = j.value("midiChannel", -1);
+    j.at("midiNoteOrCCNumber").get_to(mapping.midiNoteOrCCNumber);
+    mapping.midiValueNoteOnVelocity = j.value("midiValueNoteOnVelocity", 64);
+    mapping.midiValueCCOn = j.value("midiValueCCOn", 127);
+    mapping.midiValueCCOff = j.value("midiValueCCOff", 0);
+    mapping.calibrationMinHid = j.value("calibrationMinHid", 0);
+    mapping.calibrationMaxHid = j.value("calibrationMaxHid", 0);
+    mapping.calibrationDone = j.value("calibrationDone", false);
+    mapping.reverseAxis = j.value("reverseAxis", false);
+}
+
 void to_json(json& j, const MidiMappingConfig& cfg) {
     j = json{
-        {"hidDevicePath", cfg.hidDevicePath}, {"hidDeviceName", cfg.hidDeviceName},
-        {"control", cfg.control}, {"midiDeviceName", cfg.midiDeviceName},
-        {"midiMessageType", cfg.midiMessageType}, {"midiChannel", cfg.midiChannel},
-        {"midiNoteOrCCNumber", cfg.midiNoteOrCCNumber}, {"midiValueNoteOnVelocity", cfg.midiValueNoteOnVelocity},
-        {"midiValueCCOn", cfg.midiValueCCOn}, {"midiValueCCOff", cfg.midiValueCCOff},
-        {"calibrationMinHid", cfg.calibrationMinHid}, {"calibrationMaxHid", cfg.calibrationMaxHid},
-        {"calibrationDone", cfg.calibrationDone}, {"reverseAxis", cfg.reverseAxis},
-        {"midiSendIntervalMs", cfg.midiSendIntervalMs}
+        {"hidDevicePath", cfg.hidDevicePath},
+        {"hidDeviceName", cfg.hidDeviceName},
+        {"midiDeviceName", cfg.midiDeviceName},
+        {"defaultMidiChannel", cfg.defaultMidiChannel},
+        {"midiSendIntervalMs", cfg.midiSendIntervalMs},
+        {"mappings", cfg.mappings}
     };
 }
 
 void from_json(const json& j, MidiMappingConfig& cfg) {
     j.at("hidDevicePath").get_to(cfg.hidDevicePath);
     j.at("hidDeviceName").get_to(cfg.hidDeviceName);
-    j.at("control").get_to(cfg.control);
     j.at("midiDeviceName").get_to(cfg.midiDeviceName);
-    j.at("midiMessageType").get_to(cfg.midiMessageType);
-    j.at("midiChannel").get_to(cfg.midiChannel);
-    j.at("midiNoteOrCCNumber").get_to(cfg.midiNoteOrCCNumber);
-    cfg.midiValueNoteOnVelocity = j.value("midiValueNoteOnVelocity", 64);
-    cfg.midiValueCCOn = j.value("midiValueCCOn", 127);
-    cfg.midiValueCCOff = j.value("midiValueCCOff", 0);
-    cfg.calibrationMinHid = j.value("calibrationMinHid", 0);
-    cfg.calibrationMaxHid = j.value("calibrationMaxHid", 0);
-    cfg.calibrationDone = j.value("calibrationDone", false);
-    cfg.reverseAxis = j.value("reverseAxis", false);
+    cfg.defaultMidiChannel = j.value("defaultMidiChannel", 0);
     cfg.midiSendIntervalMs = j.value("midiSendIntervalMs", 1);
+    j.at("mappings").get_to(cfg.mappings);
 }
 
 // --- Global State ---
 std::atomic<bool> g_quitFlag(false);
-std::atomic<LONG> g_currentValue(0);
-std::atomic<bool> g_valueChanged(false);
-LONG g_previousValue = -1;
-int g_lastSentMidiValue = -1;
 RtMidiOut g_midiOut;
 MidiMappingConfig g_currentConfig;
 std::thread g_inputThread;
 std::mutex g_consoleMutex;
+
+// Per-mapping state tracking
+struct MappingState {
+    std::atomic<LONG> currentValue{0};
+    std::atomic<bool> valueChanged{false};
+    LONG previousValue = -1;
+    int lastSentMidiValue = -1;
+
+    MappingState() = default;
+    MappingState(MappingState&& other) noexcept
+        : currentValue(other.currentValue.load()),
+          valueChanged(other.valueChanged.load()),
+          previousValue(other.previousValue),
+          lastSentMidiValue(other.lastSentMidiValue) {}
+    MappingState& operator=(MappingState&& other) noexcept {
+        currentValue = other.currentValue.load();
+        valueChanged = other.valueChanged.load();
+        previousValue = other.previousValue;
+        lastSentMidiValue = other.lastSentMidiValue;
+        return *this;
+    }
+    MappingState(const MappingState&) = delete;
+    MappingState& operator=(const MappingState&) = delete;
+};
+std::vector<MappingState> g_mappingStates;
+std::mutex g_mappingStatesMutex;
 
 // --- Forward Declarations ---
 void ClearScreen();
@@ -171,7 +222,9 @@ bool string_ends_with(const std::string& str, const std::string& suffix);
 bool SaveConfiguration(const MidiMappingConfig& config, const std::string& filename);
 bool LoadConfiguration(const std::string& filename, MidiMappingConfig& config);
 std::vector<fs::path> ListConfigurations(const std::string& directory);
-bool PerformCalibration();
+bool PerformCalibration(size_t mappingIndex);
+void ConfigureMappingMidi(ControlMapping& mapping, int defaultChannel);
+void InitializeMappingStates();
 
 // ===================================================================================
 //
@@ -343,21 +396,28 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
         RAWINPUT* raw = (RAWINPUT*)lpb.get();
         if (raw->header.dwType == RIM_TYPEHID && g_preparsedData) {
-            ULONG value = 0;
-            if (g_currentConfig.control.isButton) {
-                USAGE usage = g_currentConfig.control.usage;
-                ULONG usageCount = 1;
-                if (HidP_GetUsages(HidP_Input, g_currentConfig.control.usagePage, 0, &usage, &usageCount, g_preparsedData, (PCHAR)raw->data.hid.bRawData, raw->data.hid.dwSizeHid) == HIDP_STATUS_SUCCESS) {
-                    value = 1;
+            // Process all mapped controls
+            for (size_t i = 0; i < g_currentConfig.mappings.size() && i < g_mappingStates.size(); ++i) {
+                const auto& mapping = g_currentConfig.mappings[i];
+                auto& state = g_mappingStates[i];
+                ULONG value = 0;
+
+                if (mapping.control.isButton) {
+                    USAGE usage = mapping.control.usage;
+                    ULONG usageCount = 1;
+                    if (HidP_GetUsages(HidP_Input, mapping.control.usagePage, 0, &usage, &usageCount, g_preparsedData, (PCHAR)raw->data.hid.bRawData, raw->data.hid.dwSizeHid) == HIDP_STATUS_SUCCESS) {
+                        value = 1;
+                    } else {
+                        value = 0;
+                    }
                 } else {
-                    value = 0;
+                    HidP_GetUsageValue(HidP_Input, mapping.control.usagePage, 0, mapping.control.usage, &value, g_preparsedData, (PCHAR)raw->data.hid.bRawData, raw->data.hid.dwSizeHid);
                 }
-            } else {
-                HidP_GetUsageValue(HidP_Input, g_currentConfig.control.usagePage, 0, g_currentConfig.control.usage, &value, g_preparsedData, (PCHAR)raw->data.hid.bRawData, raw->data.hid.dwSizeHid);
-            }
-            if (static_cast<LONG>(value) != g_currentValue.load()) {
-                g_currentValue = value;
-                g_valueChanged = true;
+
+                if (static_cast<LONG>(value) != state.currentValue.load()) {
+                    state.currentValue = value;
+                    state.valueChanged = true;
+                }
             }
         }
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -513,10 +573,16 @@ void InputMonitorLoop() {
         if (ret < 0 || !(pfd.revents & POLLIN)) continue;
 
         if (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {
-            if (ev.type == g_currentConfig.control.eventType && ev.code == g_currentConfig.control.eventCode) {
-                if (static_cast<LONG>(ev.value) != g_currentValue.load()) {
-                    g_currentValue = ev.value;
-                    g_valueChanged = true;
+            // Check all mapped controls for this event
+            for (size_t i = 0; i < g_currentConfig.mappings.size() && i < g_mappingStates.size(); ++i) {
+                const auto& mapping = g_currentConfig.mappings[i];
+                auto& state = g_mappingStates[i];
+
+                if (ev.type == mapping.control.eventType && ev.code == mapping.control.eventCode) {
+                    if (static_cast<LONG>(ev.value) != state.currentValue.load()) {
+                        state.currentValue = ev.value;
+                        state.valueChanged = true;
+                    }
                 }
             }
         }
@@ -572,50 +638,53 @@ int GetUserSelection(int maxValidChoice, int minValidChoice) {
 
 void DisplayMonitoringOutput() {
     std::lock_guard<std::mutex> lock(g_consoleMutex);
-    const int BAR_WIDTH = 30;
-    const int DISPLAY_WIDTH = 80;
+    const int BAR_WIDTH = 20;
     std::stringstream ss;
 
-    ss << "[" << std::left << std::setw(20) << g_currentConfig.control.name.substr(0, 20) << "] ";
+    // Move cursor to beginning and display all mappings
+    ss << "\r";
+    for (size_t i = 0; i < g_currentConfig.mappings.size() && i < g_mappingStates.size(); ++i) {
+        const auto& mapping = g_currentConfig.mappings[i];
+        const auto& state = g_mappingStates[i];
 
-    if (g_currentConfig.control.isButton) {
-        ss << (g_currentValue.load() ? "[ ### ON ### ]" : "[ --- OFF -- ]");
-    } else {
-        double percentage = 0.0;
-        LONG displayRangeMin = g_currentConfig.control.logicalMin;
-        LONG displayRangeMax = g_currentConfig.control.logicalMax;
+        std::string shortName = mapping.control.name.substr(0, 12);
+        ss << "[" << std::left << std::setw(12) << shortName << "] ";
 
-        if (g_currentConfig.calibrationDone) {
-            displayRangeMin = g_currentConfig.calibrationMinHid;
-            displayRangeMax = g_currentConfig.calibrationMaxHid;
+        if (mapping.control.isButton) {
+            ss << (state.currentValue.load() ? "ON " : "OFF");
+        } else {
+            double percentage = 0.0;
+            LONG displayRangeMin = mapping.control.logicalMin;
+            LONG displayRangeMax = mapping.control.logicalMax;
+
+            if (mapping.calibrationDone) {
+                displayRangeMin = mapping.calibrationMinHid;
+                displayRangeMax = mapping.calibrationMaxHid;
+            }
+
+            LONG displayRange = displayRangeMax - displayRangeMin;
+            if (displayRange > 0) {
+                LONG clampedValue = std::max(displayRangeMin, std::min(displayRangeMax, state.currentValue.load()));
+                percentage = static_cast<double>(clampedValue - displayRangeMin) * 100.0 / static_cast<double>(displayRange);
+            } else if (state.currentValue.load() >= displayRangeMax) {
+                percentage = 100.0;
+            }
+
+            int barLength = static_cast<int>((percentage / 100.0) * BAR_WIDTH + 0.5);
+            barLength = std::max(0, std::min(BAR_WIDTH, barLength));
+
+            std::string bar(barLength, '#');
+            std::string empty(BAR_WIDTH - barLength, '-');
+
+            ss << "|" << bar << empty << "| " << std::fixed << std::setprecision(0) << std::setw(3) << percentage << "%";
         }
-
-        LONG displayRange = displayRangeMax - displayRangeMin;
-        if (displayRange > 0) {
-            LONG clampedValue = std::max(displayRangeMin, std::min(displayRangeMax, g_currentValue.load()));
-            percentage = static_cast<double>(clampedValue - displayRangeMin) * 100.0 / static_cast<double>(displayRange);
-        } else if (g_currentValue.load() >= displayRangeMax) {
-            percentage = 100.0;
-        }
-
-        int barLength = static_cast<int>((percentage / 100.0) * BAR_WIDTH + 0.5);
-        barLength = std::max(0, std::min(BAR_WIDTH, barLength));
-
-        std::string bar(barLength, '#');
-        std::string empty(BAR_WIDTH - barLength, '-');
-
-        ss << "|" << bar << empty << "| ";
-        ss << std::fixed << std::setprecision(1) << std::setw(5) << percentage << "% ";
-        ss << "(Raw:" << std::right << std::setw(6) << g_currentValue.load() << ")";
+        ss << "  ";
     }
 
+    // Pad with spaces to clear any leftover characters
     std::string outputStr = ss.str();
-    if (outputStr.length() < DISPLAY_WIDTH) {
-        outputStr.append(DISPLAY_WIDTH - outputStr.length(), ' ');
-    } else if (outputStr.length() > DISPLAY_WIDTH) {
-        outputStr.resize(DISPLAY_WIDTH);
-    }
-    std::cout << "\r" << outputStr << std::flush;
+    outputStr.append(20, ' ');
+    std::cout << outputStr << std::flush;
 }
 
 bool SaveConfiguration(const MidiMappingConfig& config, const std::string& filename) {
@@ -663,8 +732,15 @@ std::vector<fs::path> ListConfigurations(const std::string& directory) {
     return configFiles;
 }
 
-bool PerformCalibration() {
-    if (g_currentConfig.control.isButton) return true;
+bool PerformCalibration(size_t mappingIndex) {
+    if (mappingIndex >= g_currentConfig.mappings.size() || mappingIndex >= g_mappingStates.size()) {
+        return false;
+    }
+
+    auto& mapping = g_currentConfig.mappings[mappingIndex];
+    auto& state = g_mappingStates[mappingIndex];
+
+    if (mapping.control.isButton) return true;
 
     auto do_countdown = [](const std::string& stageName) {
         for (int i = 5; i > 0; --i) {
@@ -674,13 +750,13 @@ bool PerformCalibration() {
         std::cout << "\r" << std::string(50, ' ') << "\r" << std::flush;
     };
 
-    auto capture_hold_value = [](bool captureMin) -> LONG {
+    auto capture_hold_value = [&state](bool captureMin) -> LONG {
         LONG extremeValue = captureMin ? std::numeric_limits<LONG>::max() : std::numeric_limits<LONG>::min();
         auto endTime = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 
         while (std::chrono::steady_clock::now() < endTime) {
             auto time_left = std::chrono::duration_cast<std::chrono::seconds>(endTime - std::chrono::steady_clock::now()).count();
-            LONG current_val = g_currentValue.load();
+            LONG current_val = state.currentValue.load();
             if (captureMin) extremeValue = std::min(extremeValue, current_val);
             else extremeValue = std::max(extremeValue, current_val);
 
@@ -693,26 +769,75 @@ bool PerformCalibration() {
     };
 
     ClearScreen();
-    std::cout << "--- Calibrating Axis: " << g_currentConfig.control.name << " ---\n\n";
+    std::cout << "--- Calibrating Axis: " << mapping.control.name << " ---\n\n";
     std::cout << "1. Move the control to its desired MINIMUM position.\n   Get ready!" << std::endl;
     do_countdown("MIN");
-    g_currentConfig.calibrationMinHid = capture_hold_value(true);
-    std::cout << "   Minimum value captured: " << g_currentConfig.calibrationMinHid << "\n\n";
+    mapping.calibrationMinHid = capture_hold_value(true);
+    std::cout << "   Minimum value captured: " << mapping.calibrationMinHid << "\n\n";
 
     std::cout << "2. Move the control to its desired MAXIMUM position.\n   Get ready!" << std::endl;
     do_countdown("MAX");
-    g_currentConfig.calibrationMaxHid = capture_hold_value(false);
-    std::cout << "   Maximum value captured: " << g_currentConfig.calibrationMaxHid << "\n\n";
+    mapping.calibrationMaxHid = capture_hold_value(false);
+    std::cout << "   Maximum value captured: " << mapping.calibrationMaxHid << "\n\n";
 
-    if (g_currentConfig.calibrationMinHid > g_currentConfig.calibrationMaxHid) {
+    if (mapping.calibrationMinHid > mapping.calibrationMaxHid) {
         std::cout << "Note: Min value was greater than Max value. Swapping." << std::endl;
-        std::swap(g_currentConfig.calibrationMinHid, g_currentConfig.calibrationMaxHid);
+        std::swap(mapping.calibrationMinHid, mapping.calibrationMaxHid);
     }
-    g_currentConfig.calibrationDone = true;
+    mapping.calibrationDone = true;
     std::cout << "Calibration complete. Press Enter to continue." << std::endl;
     ClearInputBuffer();
     std::cin.get();
     return true;
+}
+
+// ===================================================================================
+//
+// HELPER FUNCTIONS FOR MULTI-MAPPING SETUP
+//
+// ===================================================================================
+
+void InitializeMappingStates() {
+    std::lock_guard<std::mutex> lock(g_mappingStatesMutex);
+    g_mappingStates.clear();
+    g_mappingStates.resize(g_currentConfig.mappings.size());
+}
+
+void ConfigureMappingMidi(ControlMapping& mapping, int defaultChannel) {
+    std::cout << "\nConfiguring MIDI for: " << mapping.control.name << "\n";
+
+    std::cout << "Select MIDI message type:\n[0] Note On/Off\n[1] CC\n";
+    mapping.midiMessageType = (GetUserSelection(1, 0) == 0) ? MidiMessageType::NOTE_ON_OFF : MidiMessageType::CC;
+
+    std::cout << "Use default channel (" << (defaultChannel + 1) << ")? [0] Yes  [1] Custom channel\n";
+    if (GetUserSelection(1, 0) == 1) {
+        std::cout << "Enter MIDI Channel (1-16): ";
+        mapping.midiChannel = GetUserSelection(16, 1) - 1;
+    } else {
+        mapping.midiChannel = -1;  // Use default
+    }
+
+    std::cout << "Enter MIDI Note/CC Number (0-127): ";
+    mapping.midiNoteOrCCNumber = GetUserSelection(127, 0);
+
+    if (mapping.midiMessageType == MidiMessageType::NOTE_ON_OFF) {
+        std::cout << "Enter Note On Velocity (1-127): ";
+        mapping.midiValueNoteOnVelocity = GetUserSelection(127, 1);
+    } else {
+        if (mapping.control.isButton) {
+            std::cout << "Enter CC Value when Pressed (0-127): ";
+            mapping.midiValueCCOn = GetUserSelection(127, 0);
+            std::cout << "Enter CC Value when Released (0-127): ";
+            mapping.midiValueCCOff = GetUserSelection(127, 0);
+        } else {
+            std::cout << "Reverse MIDI output? (0=No, 1=Yes): ";
+            mapping.reverseAxis = (GetUserSelection(1, 0) == 1);
+        }
+    }
+}
+
+int GetEffectiveChannel(const ControlMapping& mapping, int defaultChannel) {
+    return (mapping.midiChannel >= 0) ? mapping.midiChannel : defaultChannel;
 }
 
 // ===================================================================================
@@ -723,7 +848,7 @@ bool PerformCalibration() {
 
 int main() {
     ClearScreen();
-    std::cout << "--- HID to MIDI Mapper ---\n\n";
+    std::cout << "--- HID to MIDI Mapper (Multi-Control) ---\n\n";
     bool configLoaded = false;
 
     auto configFiles = ListConfigurations(".");
@@ -738,7 +863,7 @@ int main() {
 
         if (choice < (int)configFiles.size()) {
             if (LoadConfiguration(configFiles[choice].string(), g_currentConfig)) {
-                std::cout << "Configuration loaded successfully." << std::endl;
+                std::cout << "Configuration loaded successfully with " << g_currentConfig.mappings.size() << " mapping(s)." << std::endl;
                 configLoaded = true;
             } else {
                 std::cerr << "Failed to load configuration. Starting new setup." << std::endl;
@@ -746,10 +871,16 @@ int main() {
         }
     }
 
+    #ifdef _WIN32
+    std::vector<HidDeviceInfo> available_devices;
+    #endif
+    std::vector<ControlInfo> available_controls;
+
     if (!configLoaded) {
         ClearScreen();
         std::cout << "--- Step 1: Select HID Controller ---\n";
-        auto available_devices = EnumerateHidDevices();
+        #ifdef _WIN32
+        available_devices = EnumerateHidDevices();
         if (available_devices.empty()) {
             std::cerr << "No joysticks found." << std::endl; return 1;
         }
@@ -764,33 +895,38 @@ int main() {
         g_currentConfig.hidDeviceName = available_devices[dev_choice].name;
         g_currentConfig.hidDevicePath = available_devices[dev_choice].path;
 
-        ClearScreen();
-        std::cout << "--- Step 2: Select Control to Map ---\n";
-        #ifdef _WIN32
-            // On Windows, we need the preparsed data from the selected device
-            UINT dataSize = 0;
-            GetRawInputDeviceInfo(available_devices[dev_choice].handle, RIDI_PREPARSEDDATA, NULL, &dataSize);
-            if (dataSize > 0) {
-                g_preparsedData = (PHIDP_PREPARSED_DATA)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dataSize);
-                GetRawInputDeviceInfo(available_devices[dev_choice].handle, RIDI_PREPARSEDDATA, g_preparsedData, &dataSize);
-            }
-            auto available_controls = GetAvailableControls(g_preparsedData, available_devices[dev_choice].caps);
+        // On Windows, we need the preparsed data from the selected device
+        UINT dataSize = 0;
+        GetRawInputDeviceInfo(available_devices[dev_choice].handle, RIDI_PREPARSEDDATA, NULL, &dataSize);
+        if (dataSize > 0) {
+            g_preparsedData = (PHIDP_PREPARSED_DATA)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dataSize);
+            GetRawInputDeviceInfo(available_devices[dev_choice].handle, RIDI_PREPARSEDDATA, g_preparsedData, &dataSize);
+        }
+        available_controls = GetAvailableControls(g_preparsedData, available_devices[dev_choice].caps);
         #else
-            auto available_controls = GetAvailableControls(g_currentConfig.hidDevicePath);
+        auto available_devices = EnumerateHidDevices();
+        if (available_devices.empty()) {
+            std::cerr << "No joysticks found." << std::endl; return 1;
+        }
+
+        std::cout << "Available Controllers:\n";
+        for (size_t i = 0; i < available_devices.size(); ++i) {
+            std::cout << "[" << i << "] " << available_devices[i].name << " (" << available_devices[i].path << ")" << std::endl;
+        }
+        int dev_choice = GetUserSelection(available_devices.size() - 1, 0);
+        if (g_quitFlag) return 1;
+
+        g_currentConfig.hidDeviceName = available_devices[dev_choice].name;
+        g_currentConfig.hidDevicePath = available_devices[dev_choice].path;
+        available_controls = GetAvailableControls(g_currentConfig.hidDevicePath);
         #endif
 
         if (available_controls.empty()) {
             std::cerr << "No usable controls found on this device." << std::endl; return 1;
         }
-        std::cout << "Available Controls:\n";
-        for (size_t i = 0; i < available_controls.size(); ++i) {
-            std::cout << "[" << i << "] " << available_controls[i].name << (available_controls[i].isButton ? " (Button)" : " (Axis)") << std::endl;
-        }
-        int ctrl_choice = GetUserSelection(available_controls.size() - 1, 0);
-        g_currentConfig.control = available_controls[ctrl_choice];
 
         ClearScreen();
-        std::cout << "--- Step 3: Select MIDI Output ---\n";
+        std::cout << "--- Step 2: Select MIDI Output ---\n";
         unsigned int portCount = g_midiOut.getPortCount();
         if (portCount == 0) {
             std::cerr << "No MIDI output ports available." << std::endl; return 1;
@@ -802,31 +938,81 @@ int main() {
         g_midiOut.openPort(midi_choice);
         g_currentConfig.midiDeviceName = g_midiOut.getPortName(midi_choice);
 
-        g_inputThread = std::thread(InputMonitorLoop);
-
         ClearScreen();
-        std::cout << "--- Step 4: Configure MIDI Mapping ---\n";
-        std::cout << "Select MIDI message type:\n[0] Note On/Off\n[1] CC\n";
-        g_currentConfig.midiMessageType = (GetUserSelection(1, 0) == 0) ? MidiMappingConfig::MidiMessageType::NOTE_ON_OFF : MidiMappingConfig::MidiMessageType::CC;
-        std::cout << "Enter MIDI Channel (1-16): ";
-        g_currentConfig.midiChannel = GetUserSelection(16, 1) - 1;
-        std::cout << "Enter MIDI Note/CC Number (0-127): ";
-        g_currentConfig.midiNoteOrCCNumber = GetUserSelection(127, 0);
+        std::cout << "--- Step 3: Set Default MIDI Channel ---\n";
+        std::cout << "Enter default MIDI Channel (1-16): ";
+        g_currentConfig.defaultMidiChannel = GetUserSelection(16, 1) - 1;
 
-        if (g_currentConfig.midiMessageType == MidiMappingConfig::MidiMessageType::NOTE_ON_OFF) {
-            std::cout << "Enter Note On Velocity (1-127): ";
-            g_currentConfig.midiValueNoteOnVelocity = GetUserSelection(127, 1);
-        } else {
-            if (g_currentConfig.control.isButton) {
-                std::cout << "Enter CC Value when Pressed (0-127): ";
-                g_currentConfig.midiValueCCOn = GetUserSelection(127, 0);
-                std::cout << "Enter CC Value when Released (0-127): ";
-                g_currentConfig.midiValueCCOff = GetUserSelection(127, 0);
-            } else {
-                std::cout << "Reverse MIDI output? (0=No, 1=Yes): ";
-                g_currentConfig.reverseAxis = (GetUserSelection(1, 0) == 1);
-                PerformCalibration();
+        // Loop to add multiple controls
+        bool addMoreControls = true;
+        while (addMoreControls && !g_quitFlag) {
+            ClearScreen();
+            std::cout << "--- Step 4: Add Control Mapping ---\n";
+            std::cout << "Current mappings: " << g_currentConfig.mappings.size() << "\n\n";
+
+            std::cout << "Available Controls:\n";
+            for (size_t i = 0; i < available_controls.size(); ++i) {
+                // Mark already mapped controls
+                bool alreadyMapped = false;
+                for (const auto& m : g_currentConfig.mappings) {
+                    #ifdef _WIN32
+                    if (m.control.usagePage == available_controls[i].usagePage &&
+                        m.control.usage == available_controls[i].usage) {
+                        alreadyMapped = true;
+                        break;
+                    }
+                    #else
+                    if (m.control.eventType == available_controls[i].eventType &&
+                        m.control.eventCode == available_controls[i].eventCode) {
+                        alreadyMapped = true;
+                        break;
+                    }
+                    #endif
+                }
+                std::cout << "[" << i << "] " << available_controls[i].name
+                          << (available_controls[i].isButton ? " (Button)" : " (Axis)")
+                          << (alreadyMapped ? " [MAPPED]" : "") << std::endl;
             }
+
+            std::cout << "\nSelect control to map (or " << available_controls.size() << " to finish adding): ";
+            int ctrl_choice = GetUserSelection(available_controls.size(), 0);
+            if (g_quitFlag) return 1;
+
+            if (ctrl_choice == (int)available_controls.size()) {
+                addMoreControls = false;
+            } else {
+                ControlMapping newMapping;
+                newMapping.control = available_controls[ctrl_choice];
+
+                // Initialize mapping states so calibration can work
+                g_currentConfig.mappings.push_back(newMapping);
+                InitializeMappingStates();
+
+                // Start input thread if not already running (needed for calibration)
+                if (!g_inputThread.joinable()) {
+                    g_inputThread = std::thread(InputMonitorLoop);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Let thread start
+                }
+
+                size_t mappingIdx = g_currentConfig.mappings.size() - 1;
+                ConfigureMappingMidi(g_currentConfig.mappings[mappingIdx], g_currentConfig.defaultMidiChannel);
+
+                // Calibrate axis controls
+                if (!newMapping.control.isButton &&
+                    g_currentConfig.mappings[mappingIdx].midiMessageType == MidiMessageType::CC) {
+                    PerformCalibration(mappingIdx);
+                }
+
+                std::cout << "\nAdd another control? [0] Yes  [1] No\n";
+                addMoreControls = (GetUserSelection(1, 0) == 0);
+            }
+        }
+
+        if (g_currentConfig.mappings.empty()) {
+            std::cerr << "No controls mapped. Exiting." << std::endl;
+            g_quitFlag = true;
+            if (g_inputThread.joinable()) g_inputThread.join();
+            return 1;
         }
     } else { // Config was loaded
         #ifdef _WIN32
@@ -845,7 +1031,11 @@ int main() {
                 std::cerr << "Configured HID device not found." << std::endl; return 1;
             }
         #endif
+
+        // Initialize mapping states
+        InitializeMappingStates();
         g_inputThread = std::thread(InputMonitorLoop);
+
         unsigned int portCount = g_midiOut.getPortCount();
         int midi_port = -1;
         for (unsigned int i = 0; i < portCount; ++i) {
@@ -866,6 +1056,7 @@ int main() {
     if (!configLoaded) {
         ClearScreen();
         std::cout << "--- Step 5: Save Configuration ---\n";
+        std::cout << "Configured " << g_currentConfig.mappings.size() << " control mapping(s).\n";
         std::cout << "Enter filename to save (e.g., my_joystick.hidmidi.json), or leave blank to skip: ";
         std::string saveFilename;
         std::getline(std::cin, saveFilename);
@@ -882,7 +1073,14 @@ int main() {
     ClearScreen();
     std::cout << "--- Monitoring Active ---\n";
     std::cout << "Device: " << g_currentConfig.hidDeviceName << std::endl;
-    std::cout << "Control: " << g_currentConfig.control.name << std::endl;
+    std::cout << "Mappings: " << g_currentConfig.mappings.size() << std::endl;
+    for (size_t i = 0; i < g_currentConfig.mappings.size(); ++i) {
+        const auto& m = g_currentConfig.mappings[i];
+        int ch = GetEffectiveChannel(m, g_currentConfig.defaultMidiChannel);
+        std::cout << "  " << (i+1) << ". " << m.control.name << " -> Ch" << (ch+1)
+                  << " " << (m.midiMessageType == MidiMessageType::NOTE_ON_OFF ? "Note" : "CC")
+                  << " " << m.midiNoteOrCCNumber << std::endl;
+    }
     std::cout << "MIDI Port: " << g_currentConfig.midiDeviceName << std::endl;
     std::cout << "(Press Enter to exit on Linux, or close window)\n\n";
 
@@ -894,35 +1092,50 @@ int main() {
             lastDisplayTime = now;
         }
 
-        if (g_valueChanged.exchange(false)) {
-            std::vector<unsigned char> message;
-            if (g_currentConfig.control.isButton) {
-                bool pressed = g_currentValue.load() != 0;
-                if (pressed != (g_previousValue != 0)) {
-                    if (g_currentConfig.midiMessageType == MidiMappingConfig::MidiMessageType::NOTE_ON_OFF) {
-                        message = {(unsigned char)((pressed ? 0x90 : 0x80) | g_currentConfig.midiChannel), (unsigned char)g_currentConfig.midiNoteOrCCNumber, (unsigned char)(pressed ? g_currentConfig.midiValueNoteOnVelocity : 0)};
-                    } else {
-                        message = {(unsigned char)(0xB0 | g_currentConfig.midiChannel), (unsigned char)g_currentConfig.midiNoteOrCCNumber, (unsigned char)(pressed ? g_currentConfig.midiValueCCOn : g_currentConfig.midiValueCCOff)};
+        // Process all mappings
+        for (size_t i = 0; i < g_currentConfig.mappings.size() && i < g_mappingStates.size(); ++i) {
+            auto& mapping = g_currentConfig.mappings[i];
+            auto& state = g_mappingStates[i];
+
+            if (state.valueChanged.exchange(false)) {
+                std::vector<unsigned char> message;
+                int channel = GetEffectiveChannel(mapping, g_currentConfig.defaultMidiChannel);
+
+                if (mapping.control.isButton) {
+                    bool pressed = state.currentValue.load() != 0;
+                    if (pressed != (state.previousValue != 0)) {
+                        if (mapping.midiMessageType == MidiMessageType::NOTE_ON_OFF) {
+                            message = {(unsigned char)((pressed ? 0x90 : 0x80) | channel),
+                                       (unsigned char)mapping.midiNoteOrCCNumber,
+                                       (unsigned char)(pressed ? mapping.midiValueNoteOnVelocity : 0)};
+                        } else {
+                            message = {(unsigned char)(0xB0 | channel),
+                                       (unsigned char)mapping.midiNoteOrCCNumber,
+                                       (unsigned char)(pressed ? mapping.midiValueCCOn : mapping.midiValueCCOff)};
+                        }
+                        if (!message.empty()) g_midiOut.sendMessage(&message);
                     }
-                    if (!message.empty()) g_midiOut.sendMessage(&message);
-                }
-            } else { // Axis
-                if (g_currentConfig.calibrationDone) {
-                    LONG range = g_currentConfig.calibrationMaxHid - g_currentConfig.calibrationMinHid;
-                    if (range > 0) {
-                        LONG clamped = std::max(g_currentConfig.calibrationMinHid, std::min(g_currentConfig.calibrationMaxHid, g_currentValue.load()));
-                        double norm = (double)(clamped - g_currentConfig.calibrationMinHid) / range;
-                        if (g_currentConfig.reverseAxis) norm = 1.0 - norm;
-                        int midiVal = (int)(norm * 127.0 + 0.5);
-                        if (midiVal != g_lastSentMidiValue) {
-                            message = {(unsigned char)(0xB0 | g_currentConfig.midiChannel), (unsigned char)g_currentConfig.midiNoteOrCCNumber, (unsigned char)midiVal};
-                            g_midiOut.sendMessage(&message);
-                            g_lastSentMidiValue = midiVal;
+                } else { // Axis
+                    if (mapping.calibrationDone) {
+                        LONG range = mapping.calibrationMaxHid - mapping.calibrationMinHid;
+                        if (range > 0) {
+                            LONG clamped = std::max(mapping.calibrationMinHid,
+                                                    std::min(mapping.calibrationMaxHid, state.currentValue.load()));
+                            double norm = (double)(clamped - mapping.calibrationMinHid) / range;
+                            if (mapping.reverseAxis) norm = 1.0 - norm;
+                            int midiVal = (int)(norm * 127.0 + 0.5);
+                            if (midiVal != state.lastSentMidiValue) {
+                                message = {(unsigned char)(0xB0 | channel),
+                                           (unsigned char)mapping.midiNoteOrCCNumber,
+                                           (unsigned char)midiVal};
+                                g_midiOut.sendMessage(&message);
+                                state.lastSentMidiValue = midiVal;
+                            }
                         }
                     }
                 }
+                state.previousValue = state.currentValue.load();
             }
-            g_previousValue = g_currentValue.load();
         }
 
         #ifndef _WIN32

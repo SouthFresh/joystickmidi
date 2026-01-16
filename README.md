@@ -6,12 +6,138 @@ A simple cross-platform utility to map HID joystick/gamepad inputs (axes/buttons
 
 ## Features
 
-*   Map joystick/gamepad buttons and axes to MIDI Note On/Off or Control Change (CC) messages.
-*   Configure MIDI channel, note/CC number, and output values.
+*   **Multi-control mapping** - Map multiple joystick/gamepad buttons and axes simultaneously.
+*   Map to MIDI Note On/Off or Control Change (CC) messages.
+*   **Default MIDI channel** with per-mapping channel override.
+*   Configure note/CC number, velocity, and output values per control.
 *   Interactive axis calibration (min/max detection) and reversal.
 *   Save and load configurations (`.hidmidi.json`).
 *   Simple console interface.
 *   Cross-platform support for Windows and Linux.
+
+## Program Flow
+
+```mermaid
+flowchart TD
+    subgraph Startup
+        A[Start Application] --> B{Config files exist?}
+        B -->|Yes| C[Display config list]
+        C --> D{Load existing or create new?}
+        D -->|Load existing| E[Load JSON config]
+        D -->|Create new| F[New Configuration]
+        B -->|No| F
+    end
+
+    subgraph NewConfig ["New Configuration Setup"]
+        F --> G[Step 1: Enumerate HID devices]
+        G --> H[Select joystick/gamepad]
+        H --> I[Step 2: Enumerate MIDI ports]
+        I --> J[Select MIDI output port]
+        J --> K[Step 3: Set default MIDI channel]
+        K --> L[Step 4: Add Control Mapping]
+    end
+
+    subgraph AddMapping ["Add Control Mapping Loop"]
+        L --> M[Display available controls]
+        M --> N{Select control or finish?}
+        N -->|Select control| O[Configure MIDI settings]
+        O --> P{Button or Axis?}
+        P -->|Button| Q[Set Note/CC type & values]
+        P -->|Axis| R[Set CC & reverse option]
+        R --> S[Calibrate min/max range]
+        Q --> T{Add another control?}
+        S --> T
+        T -->|Yes| M
+        T -->|No| U[Step 5: Save configuration]
+        N -->|Finish| U
+    end
+
+    subgraph LoadConfig ["Load Existing Config"]
+        E --> V[Find HID device by path]
+        V --> W{Device found?}
+        W -->|No| X[Error: Device not found]
+        X --> END1[Exit]
+        W -->|Yes| Y[Find MIDI port by name]
+        Y --> Z{Port found?}
+        Z -->|No| AA[Error: MIDI port not found]
+        AA --> END1
+        Z -->|Yes| BB[Initialize mapping states]
+    end
+
+    U --> BB
+    BB --> CC[Start input monitor thread]
+
+    subgraph Monitoring ["Real-time Monitoring Loop"]
+        CC --> DD[Display monitoring status]
+        DD --> EE{For each mapping}
+        EE --> FF{Value changed?}
+        FF -->|Yes| GG{Button or Axis?}
+        GG -->|Button| HH[Send Note On/Off or CC]
+        GG -->|Axis| II[Calculate MIDI value 0-127]
+        II --> JJ[Send CC message]
+        HH --> KK{More mappings?}
+        JJ --> KK
+        FF -->|No| KK
+        KK -->|Yes| EE
+        KK -->|No| LL{Quit signal?}
+        LL -->|No| DD
+        LL -->|Yes| MM[Cleanup & Exit]
+    end
+
+    subgraph InputThread ["Input Monitor Thread"]
+        direction TB
+        NN[Read HID input events] --> OO{For each mapping}
+        OO --> PP{Event matches control?}
+        PP -->|Yes| QQ[Update value & set changed flag]
+        PP -->|No| RR{More mappings?}
+        QQ --> RR
+        RR -->|Yes| OO
+        RR -->|No| SS{Quit flag set?}
+        SS -->|No| NN
+        SS -->|Yes| TT[Thread exit]
+    end
+
+    CC -.-> NN
+    MM --> END2[Exit]
+
+    style A fill:#90EE90
+    style END1 fill:#FFB6C1
+    style END2 fill:#90EE90
+    style MM fill:#87CEEB
+```
+
+### Data Flow
+
+```mermaid
+flowchart LR
+    subgraph Input ["Input Layer"]
+        JS[Joystick/Gamepad]
+        JS -->|HID Events| WIN[Windows Raw Input API]
+        JS -->|Input Events| LIN[Linux /dev/input]
+    end
+
+    subgraph Processing ["Processing Layer"]
+        WIN --> MT[Monitor Thread]
+        LIN --> MT
+        MT -->|Update values| MS[(Mapping States)]
+        MS -->|Check changes| ML[Main Loop]
+    end
+
+    subgraph Output ["Output Layer"]
+        ML -->|MIDI Messages| RTMIDI[RtMidi Library]
+        RTMIDI --> MIDI[MIDI Output Port]
+    end
+
+    subgraph Config ["Configuration"]
+        JSON[(JSON Config File)]
+        JSON <-->|Load/Save| CFG[MidiMappingConfig]
+        CFG --> ML
+    end
+
+    style JS fill:#FFD700
+    style MIDI fill:#9370DB
+    style JSON fill:#FFA07A
+```
 
 ## Get Latest Release
 
