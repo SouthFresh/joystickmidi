@@ -356,10 +356,10 @@ std::string GetHidUsageName(USAGE usagePage, USAGE usage, bool isButton) {
 
     // Fallback: show usage page and code
     if (usagePage != 0x01 && usagePage != 0x09) {
-        return "Usage(P:0x" +
-               (std::ostringstream() << std::hex << std::setfill('0') << std::setw(2) << usagePage).str() +
-               ", U:0x" +
-               (std::ostringstream() << std::hex << std::setfill('0') << std::setw(2) << usage).str() + ")";
+        std::ostringstream oss;
+        oss << "Usage(P:0x" << std::hex << std::setfill('0') << std::setw(2) << usagePage
+            << ", U:0x" << std::setw(2) << usage << ")";
+        return oss.str();
     }
 
     // Generic fallback for unknown usages on known pages
