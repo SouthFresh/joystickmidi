@@ -12,6 +12,9 @@ A simple cross-platform utility to map HID joystick/gamepad inputs (axes/buttons
 *   Configure note/CC number, velocity, and output values per control.
 *   Interactive axis calibration (min/max detection) and reversal.
 *   Save and load configurations (`.hidmidi.json`).
+*   **Edit existing configurations** - Add, remove, or modify control mappings without starting from scratch.
+*   **Descriptive control names** - Displays human-readable names like "X Axis", "Throttle", "Hat Switch" instead of raw HID codes.
+*   **Graceful device handling** - Prompts to connect the device if not found, with retry option.
 *   Simple console interface.
 *   Cross-platform support for Windows and Linux.
 
@@ -55,13 +58,33 @@ flowchart TD
     subgraph LoadConfig ["Load Existing Config"]
         E --> V[Find HID device by path]
         V --> W{Device found?}
-        W -->|No| X[Error: Device not found]
-        X --> END1[Exit]
-        W -->|Yes| Y[Find MIDI port by name]
-        Y --> Z{Port found?}
-        Z -->|No| AA[Error: MIDI port not found]
+        W -->|No| X[Device Not Connected prompt]
+        X --> X1{Retry or Exit?}
+        X1 -->|Retry| V
+        X1 -->|Exit| END1[Exit]
+        W -->|Yes| Y{Run or Edit config?}
+        Y -->|Edit| EDIT[Edit Configuration Menu]
+        EDIT --> Y
+        Y -->|Run| Z[Find MIDI port by name]
+        Z --> ZZ{Port found?}
+        ZZ -->|No| AA[Error: MIDI port not found]
         AA --> END1
-        Z -->|Yes| BB[Initialize mapping states]
+        ZZ -->|Yes| BB[Initialize mapping states]
+    end
+
+    subgraph EditConfig ["Edit Configuration Menu"]
+        EDIT --> ED1{Select option}
+        ED1 -->|Add mapping| ED2[Select control & configure MIDI]
+        ED1 -->|Remove mapping| ED3[Select & confirm removal]
+        ED1 -->|Edit mapping| ED4[Modify MIDI settings/recalibrate]
+        ED1 -->|Change channel| ED5[Set new default channel]
+        ED1 -->|Save| ED6[Save to file]
+        ED1 -->|Continue| ED7[Exit edit menu]
+        ED2 --> ED1
+        ED3 --> ED1
+        ED4 --> ED1
+        ED5 --> ED1
+        ED6 --> ED1
     end
 
     U --> BB
@@ -204,13 +227,23 @@ Click the badge above to download the latest pre-compiled version for your opera
 2.  **First Run / New Configuration:**
     *   Follow the on-screen prompts to:
         *   Select your HID controller.
-        *   Choose the specific button or axis you want to map.
+        *   Choose the specific button or axis you want to map (with descriptive names like "X Axis", "Throttle", etc.).
         *   Select your MIDI output port.
-        *   Configure the MIDI message type (Note/CC), channel, number, and values.
+        *   Set the default MIDI channel.
+        *   Configure the MIDI message type (Note/CC), channel, number, and values for each control.
         *   Calibrate the axis range if mapping an axis.
+        *   Add as many control mappings as needed.
         *   Save the configuration to a `.hidmidi.json` file.
 3.  **Load Configuration:** If `.hidmidi.json` files exist in the same directory, you'll be prompted to load one or create a new configuration.
-4.  **Monitoring:** Once configured (or loaded), the application will monitor the selected input and send MIDI messages accordingly.
+    *   If the configured device is not connected, you'll be prompted to connect it and retry.
+4.  **Edit Configuration:** After loading an existing configuration, you can choose to edit it:
+    *   Add new control mappings
+    *   Remove existing mappings
+    *   Edit MIDI settings for any mapping
+    *   Recalibrate axes or toggle reverse
+    *   Change the default MIDI channel
+    *   Save changes to a new or existing file
+5.  **Monitoring:** Once configured (or loaded), the application will monitor the selected inputs and send MIDI messages accordingly.
     *   On Windows, close the console window to exit.
     *   On Linux, press `Enter` to exit.
 
