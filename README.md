@@ -15,6 +15,7 @@ A simple cross-platform utility to map HID joystick/gamepad inputs (axes/buttons
 *   **Edit existing configurations** - Add, remove, or modify control mappings without starting from scratch.
 *   **Descriptive control names** - Displays human-readable names like "X Axis", "Throttle", "Hat Switch" instead of raw HID codes.
 *   **Graceful device handling** - Prompts to connect the device if not found, with retry option.
+*   **Debug logging** - Optional file-based logging with configurable levels for troubleshooting.
 *   Simple console interface.
 *   Cross-platform support for Windows and Linux.
 
@@ -246,6 +247,21 @@ Click the badge above to download the latest pre-compiled version for your opera
 5.  **Monitoring:** Once configured (or loaded), the application will monitor the selected inputs and send MIDI messages accordingly.
     *   On Windows, close the console window to exit.
     *   On Linux, press `Enter` to exit.
+
+## Debug Logging
+
+For troubleshooting, you can enable file-based logging with the `-d` flag:
+
+```bash
+JoystickMIDI -d DEBUG    # Most verbose - all messages
+JoystickMIDI -d INFO     # General operational messages
+JoystickMIDI -d WARN     # Warnings and errors only
+JoystickMIDI -d ERROR    # Errors only
+```
+
+Logs are written to timestamped files (e.g., `joystickmidi_2025-01-20_18-30-00.log`) in the current directory. Log files rotate automatically every 3 minutes to prevent excessive file sizes.
+
+Use `-h` or `--help` to display usage information.
 
 ## License
 
