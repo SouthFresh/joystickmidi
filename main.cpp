@@ -48,6 +48,7 @@
 // --- Project-Specific Headers ---
 #include "rtmidi/RtMidi.h"
 #include "third_party/nlohmann/json.hpp"
+#include "Logger.h"
 
 // --- Namespaces and Constants ---
 using json = nlohmann::json;
@@ -523,14 +524,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 void InputMonitorLoop() {
+    LOG_DEBUG("Setting up Windows raw input message window");
     WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.lpszClassName = L"JoystickMidiListener";
-    if (!RegisterClass(&wc)) return;
+    if (!RegisterClass(&wc)) {
+        LOG_ERROR("Failed to register window class");
+        return;
+    }
 
     g_messageWindow = CreateWindowEx(0, wc.lpszClassName, L"Listener", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, NULL, NULL);
-    if (!g_messageWindow) return;
+    if (!g_messageWindow) {
+        LOG_ERROR("Failed to create message window");
+        return;
+    }
+    LOG_INFO("Input monitor thread started");
 
     g_rid.usUsagePage = 1; // Generic Desktop
     g_rid.usUsage = 4;     // Joystick
@@ -546,6 +555,7 @@ void InputMonitorLoop() {
         DispatchMessage(&msg);
     }
 
+    LOG_INFO("Input monitor thread stopped");
     if (g_preparsedData) HeapFree(GetProcessHeap(), 0, g_preparsedData);
     if (g_messageWindow) DestroyWindow(g_messageWindow);
     UnregisterClass(L"JoystickMidiListener", GetModuleHandle(NULL));
@@ -648,12 +658,15 @@ std::vector<ControlInfo> GetAvailableControls(const std::string& devicePath) {
 }
 
 void InputMonitorLoop() {
+    LOG_DEBUG_S("Opening device for input monitoring: " << g_currentConfig.hidDevicePath);
     int fd = open(g_currentConfig.hidDevicePath.c_str(), O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
         std::lock_guard<std::mutex> lock(g_consoleMutex);
         std::cerr << "\nError: Could not open device " << g_currentConfig.hidDevicePath << " in input thread. " << strerror(errno) << std::endl;
+        LOG_ERROR_S("Could not open device " << g_currentConfig.hidDevicePath << ": " << strerror(errno));
         return;
     }
+    LOG_INFO("Input monitor thread started");
 
     struct input_event ev;
     struct pollfd pfd;
@@ -680,6 +693,7 @@ void InputMonitorLoop() {
         }
     }
     close(fd);
+    LOG_INFO("Input monitor thread stopped");
     std::cout << "\nInput monitoring thread finished." << std::endl;
 }
 
@@ -780,31 +794,41 @@ void DisplayMonitoringOutput() {
 }
 
 bool SaveConfiguration(const MidiMappingConfig& config, const std::string& filename) {
+    LOG_DEBUG_S("Saving configuration to: " << filename);
     try {
         json j = config;
         std::ofstream ofs(filename);
         if (!ofs.is_open()) {
             std::cerr << "Error: Could not open file for saving: " << filename << std::endl;
+            LOG_ERROR_S("Could not open file for saving: " << filename);
             return false;
         }
         ofs << std::setw(4) << j << std::endl;
+        LOG_INFO_S("Configuration saved to: " << filename);
         return true;
     } catch (const std::exception& e) {
         std::cerr << "Error saving config: " << e.what() << std::endl;
+        LOG_ERROR_S("Error saving config: " << e.what());
         return false;
     }
 }
 
 bool LoadConfiguration(const std::string& filename, MidiMappingConfig& config) {
+    LOG_DEBUG_S("Loading configuration from: " << filename);
     try {
         std::ifstream ifs(filename);
-        if (!ifs.is_open()) return false;
+        if (!ifs.is_open()) {
+            LOG_ERROR_S("Could not open config file: " << filename);
+            return false;
+        }
         json j;
         ifs >> j;
         config = j.get<MidiMappingConfig>();
+        LOG_INFO_S("Configuration loaded: " << config.mappings.size() << " mapping(s)");
         return true;
     } catch (const std::exception& e) {
         std::cerr << "Error loading config '" << filename << "': " << e.what() << std::endl;
+        LOG_ERROR_S("Error loading config '" << filename << "': " << e.what());
         return false;
     }
 }
@@ -874,9 +898,12 @@ bool PerformCalibration(size_t mappingIndex) {
 
     if (mapping.calibrationMinHid > mapping.calibrationMaxHid) {
         std::cout << "Note: Min value was greater than Max value. Swapping." << std::endl;
+        LOG_DEBUG("Calibration values swapped (min > max)");
         std::swap(mapping.calibrationMinHid, mapping.calibrationMaxHid);
     }
     mapping.calibrationDone = true;
+    LOG_INFO_S("Calibration complete for " << mapping.control.name
+               << ": min=" << mapping.calibrationMinHid << " max=" << mapping.calibrationMaxHid);
     std::cout << "Calibration complete. Press Enter to continue." << std::endl;
     ClearInputBuffer();
     std::cin.get();
@@ -1180,12 +1207,35 @@ bool EditConfiguration(std::vector<ControlInfo>& available_controls) {
 //
 // ===================================================================================
 
-int main() {
+int main(int argc, char* argv[]) {
+    // Parse command-line arguments for logging
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if ((arg == "-d" || arg == "--debug") && i + 1 < argc) {
+            Logger::instance().init(argv[i + 1]);
+            i++; // Skip the level argument
+        } else if (arg == "-h" || arg == "--help") {
+            std::cout << "Usage: JoystickMIDI [options]\n"
+                      << "Options:\n"
+                      << "  -d, --debug LEVEL  Enable logging at LEVEL (DEBUG, INFO, WARN, ERROR)\n"
+                      << "                     Logs at specified level and above to file\n"
+                      << "  -h, --help         Show this help message\n"
+                      << "\nExamples:\n"
+                      << "  JoystickMIDI -d DEBUG    Log everything (DEBUG and above)\n"
+                      << "  JoystickMIDI -d INFO     Log INFO, WARN, and ERROR\n"
+                      << "  JoystickMIDI -d ERROR    Log only ERROR messages\n";
+            return 0;
+        }
+    }
+
+    LOG_INFO("Application started");
+
     ClearScreen();
     std::cout << "--- HID to MIDI Mapper (Multi-Control) ---\n\n";
     bool configLoaded = false;
 
     auto configFiles = ListConfigurations(".");
+    LOG_DEBUG_S("Found " << configFiles.size() << " configuration file(s)");
     if (!configFiles.empty()) {
         std::cout << "Found existing configurations:\n";
         for (size_t i = 0; i < configFiles.size(); ++i) {
@@ -1196,11 +1246,14 @@ int main() {
         if (g_quitFlag) return 1;
 
         if (choice < (int)configFiles.size()) {
+            LOG_INFO_S("Loading configuration: " << configFiles[choice].filename().string());
             if (LoadConfiguration(configFiles[choice].string(), g_currentConfig)) {
                 std::cout << "Configuration loaded successfully with " << g_currentConfig.mappings.size() << " mapping(s)." << std::endl;
+                LOG_INFO_S("Configuration loaded with " << g_currentConfig.mappings.size() << " mapping(s)");
                 configLoaded = true;
             } else {
                 std::cerr << "Failed to load configuration. Starting new setup." << std::endl;
+                LOG_ERROR_S("Failed to load configuration: " << configFiles[choice].filename().string());
             }
         }
     }
@@ -1214,20 +1267,26 @@ int main() {
         ClearScreen();
         std::cout << "--- Step 1: Select HID Controller ---\n";
         #ifdef _WIN32
+        LOG_DEBUG("Enumerating HID devices (Windows)");
         available_devices = EnumerateHidDevices();
+        LOG_DEBUG_S("Found " << available_devices.size() << " joystick/gamepad device(s)");
         if (available_devices.empty()) {
-            std::cerr << "No joysticks found." << std::endl; return 1;
+            std::cerr << "No joysticks found." << std::endl;
+            LOG_ERROR("No joysticks found");
+            return 1;
         }
 
         std::cout << "Available Controllers:\n";
         for (size_t i = 0; i < available_devices.size(); ++i) {
             std::cout << "[" << i << "] " << available_devices[i].name << " (" << available_devices[i].path << ")" << std::endl;
+            LOG_DEBUG_S("  Device " << i << ": " << available_devices[i].name);
         }
         int dev_choice = GetUserSelection(available_devices.size() - 1, 0);
         if (g_quitFlag) return 1;
 
         g_currentConfig.hidDeviceName = available_devices[dev_choice].name;
         g_currentConfig.hidDevicePath = available_devices[dev_choice].path;
+        LOG_INFO_S("Selected device: " << g_currentConfig.hidDeviceName);
 
         // On Windows, we need the preparsed data from the selected device
         UINT dataSize = 0;
@@ -1238,44 +1297,60 @@ int main() {
         }
         available_controls = GetAvailableControls(g_preparsedData, available_devices[dev_choice].caps);
         #else
+        LOG_DEBUG("Enumerating HID devices (Linux)");
         auto available_devices = EnumerateHidDevices();
+        LOG_DEBUG_S("Found " << available_devices.size() << " joystick/gamepad device(s)");
         if (available_devices.empty()) {
-            std::cerr << "No joysticks found." << std::endl; return 1;
+            std::cerr << "No joysticks found." << std::endl;
+            LOG_ERROR("No joysticks found");
+            return 1;
         }
 
         std::cout << "Available Controllers:\n";
         for (size_t i = 0; i < available_devices.size(); ++i) {
             std::cout << "[" << i << "] " << available_devices[i].name << " (" << available_devices[i].path << ")" << std::endl;
+            LOG_DEBUG_S("  Device " << i << ": " << available_devices[i].name);
         }
         int dev_choice = GetUserSelection(available_devices.size() - 1, 0);
         if (g_quitFlag) return 1;
 
         g_currentConfig.hidDeviceName = available_devices[dev_choice].name;
         g_currentConfig.hidDevicePath = available_devices[dev_choice].path;
+        LOG_INFO_S("Selected device: " << g_currentConfig.hidDeviceName);
         available_controls = GetAvailableControls(g_currentConfig.hidDevicePath);
         #endif
 
+        LOG_DEBUG_S("Found " << available_controls.size() << " available control(s)");
         if (available_controls.empty()) {
-            std::cerr << "No usable controls found on this device." << std::endl; return 1;
+            std::cerr << "No usable controls found on this device." << std::endl;
+            LOG_ERROR("No usable controls found on device");
+            return 1;
         }
 
         ClearScreen();
         std::cout << "--- Step 2: Select MIDI Output ---\n";
+        LOG_DEBUG("Enumerating MIDI output ports");
         unsigned int portCount = g_midiOut.getPortCount();
+        LOG_DEBUG_S("Found " << portCount << " MIDI output port(s)");
         if (portCount == 0) {
-            std::cerr << "No MIDI output ports available." << std::endl; return 1;
+            std::cerr << "No MIDI output ports available." << std::endl;
+            LOG_ERROR("No MIDI output ports available");
+            return 1;
         }
         for (unsigned int i = 0; i < portCount; ++i) {
             std::cout << "  [" << i << "]: " << g_midiOut.getPortName(i) << std::endl;
+            LOG_DEBUG_S("  MIDI port " << i << ": " << g_midiOut.getPortName(i));
         }
         int midi_choice = GetUserSelection(portCount - 1, 0);
         g_midiOut.openPort(midi_choice);
         g_currentConfig.midiDeviceName = g_midiOut.getPortName(midi_choice);
+        LOG_INFO_S("Selected MIDI port: " << g_currentConfig.midiDeviceName);
 
         ClearScreen();
         std::cout << "--- Step 3: Set Default MIDI Channel ---\n";
         std::cout << "Enter default MIDI Channel (1-16): ";
         g_currentConfig.defaultMidiChannel = GetUserSelection(16, 1) - 1;
+        LOG_INFO_S("Default MIDI channel set to: " << (g_currentConfig.defaultMidiChannel + 1));
 
         // Loop to add multiple controls
         bool addMoreControls = true;
@@ -1319,9 +1394,11 @@ int main() {
 
             if (ctrl_choice == (int)available_controls.size()) {
                 addMoreControls = false;
+                LOG_DEBUG("User finished adding control mappings");
             } else {
                 ControlMapping newMapping;
                 newMapping.control = available_controls[ctrl_choice];
+                LOG_INFO_S("Adding mapping for control: " << newMapping.control.name);
 
                 // Initialize mapping states so calibration can work
                 g_currentConfig.mappings.push_back(newMapping);
@@ -1349,11 +1426,14 @@ int main() {
 
         if (g_currentConfig.mappings.empty()) {
             std::cerr << "No controls mapped. Exiting." << std::endl;
+            LOG_WARN("No controls mapped, exiting");
             g_quitFlag = true;
             if (g_inputThread.joinable()) g_inputThread.join();
             return 1;
         }
+        LOG_INFO_S("Configuration complete with " << g_currentConfig.mappings.size() << " mapping(s)");
     } else { // Config was loaded
+        LOG_DEBUG_S("Looking for configured device: " << g_currentConfig.hidDevicePath);
         #ifdef _WIN32
             // On Windows, we need to find the device and get its preparsed data
             bool found = false;
@@ -1365,10 +1445,12 @@ int main() {
                         dev.preparsedData = nullptr; // Prevent destructor from freeing it
                         available_controls = GetAvailableControls(g_preparsedData, dev.caps);
                         found = true;
+                        LOG_INFO_S("Found configured device: " << g_currentConfig.hidDeviceName);
                         break;
                     }
                 }
                 if (!found) {
+                    LOG_WARN_S("Configured device not found: " << g_currentConfig.hidDeviceName);
                     ClearScreen();
                     std::cout << "--- Device Not Connected ---\n\n";
                     std::cout << "The configured device was not found:\n";
@@ -1377,8 +1459,10 @@ int main() {
                     std::cout << "[0] Retry\n[1] Exit\n";
                     int retryChoice = GetUserSelection(1, 0);
                     if (g_quitFlag || retryChoice == 1) {
+                        LOG_INFO("User chose to exit after device not found");
                         return 1;
                     }
+                    LOG_DEBUG("User retrying device connection");
                 }
             }
         #else
@@ -1389,9 +1473,11 @@ int main() {
                     available_controls = GetAvailableControls(g_currentConfig.hidDevicePath);
                     if (!available_controls.empty()) {
                         found = true;
+                        LOG_INFO_S("Found configured device: " << g_currentConfig.hidDeviceName);
                     }
                 }
                 if (!found) {
+                    LOG_WARN_S("Configured device not found: " << g_currentConfig.hidDeviceName);
                     ClearScreen();
                     std::cout << "--- Device Not Connected ---\n\n";
                     std::cout << "The configured device was not found:\n";
@@ -1401,8 +1487,10 @@ int main() {
                     std::cout << "[0] Retry\n[1] Exit\n";
                     int retryChoice = GetUserSelection(1, 0);
                     if (g_quitFlag || retryChoice == 1) {
+                        LOG_INFO("User chose to exit after device not found");
                         return 1;
                     }
+                    LOG_DEBUG("User retrying device connection");
                 }
             }
         #endif
@@ -1414,10 +1502,12 @@ int main() {
 
         // Initialize mapping states and start input thread
         InitializeMappingStates();
+        LOG_DEBUG("Starting input monitor thread");
         g_inputThread = std::thread(InputMonitorLoop);
         std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Let thread start
 
         if (editChoice == 1) {
+            LOG_INFO("Entering configuration edit mode");
             bool modified = EditConfiguration(available_controls);
 
             if (g_currentConfig.mappings.empty()) {
@@ -1446,6 +1536,7 @@ int main() {
             }
         }
 
+        LOG_DEBUG_S("Looking for configured MIDI port: " << g_currentConfig.midiDeviceName);
         unsigned int portCount = g_midiOut.getPortCount();
         int midi_port = -1;
         for (unsigned int i = 0; i < portCount; ++i) {
@@ -1456,11 +1547,13 @@ int main() {
         }
         if (midi_port == -1) {
             std::cerr << "Configured MIDI port '" << g_currentConfig.midiDeviceName << "' not found." << std::endl;
+            LOG_ERROR_S("Configured MIDI port not found: " << g_currentConfig.midiDeviceName);
             g_quitFlag = true;
             if (g_inputThread.joinable()) g_inputThread.join();
             return 1;
         }
         g_midiOut.openPort(midi_port);
+        LOG_INFO_S("Opened MIDI port: " << g_currentConfig.midiDeviceName);
     }
 
     if (!configLoaded) {
@@ -1484,6 +1577,10 @@ int main() {
     std::cout << "--- Monitoring Active ---\n";
     std::cout << "Device: " << g_currentConfig.hidDeviceName << std::endl;
     std::cout << "Mappings: " << g_currentConfig.mappings.size() << std::endl;
+    LOG_INFO("Starting monitoring mode");
+    LOG_INFO_S("Device: " << g_currentConfig.hidDeviceName);
+    LOG_INFO_S("MIDI Port: " << g_currentConfig.midiDeviceName);
+    LOG_INFO_S("Mappings: " << g_currentConfig.mappings.size());
     for (size_t i = 0; i < g_currentConfig.mappings.size(); ++i) {
         const auto& m = g_currentConfig.mappings[i];
         int ch = GetEffectiveChannel(m, g_currentConfig.defaultMidiChannel);
@@ -1518,10 +1615,16 @@ int main() {
                             message = {(unsigned char)((pressed ? 0x90 : 0x80) | channel),
                                        (unsigned char)mapping.midiNoteOrCCNumber,
                                        (unsigned char)(pressed ? mapping.midiValueNoteOnVelocity : 0)};
+                            LOG_DEBUG_S(mapping.control.name << ": Note " << (pressed ? "On" : "Off")
+                                       << " Ch" << (channel+1) << " Note" << mapping.midiNoteOrCCNumber
+                                       << " Vel" << (pressed ? mapping.midiValueNoteOnVelocity : 0));
                         } else {
                             message = {(unsigned char)(0xB0 | channel),
                                        (unsigned char)mapping.midiNoteOrCCNumber,
                                        (unsigned char)(pressed ? mapping.midiValueCCOn : mapping.midiValueCCOff)};
+                            LOG_DEBUG_S(mapping.control.name << ": CC Ch" << (channel+1)
+                                       << " CC" << mapping.midiNoteOrCCNumber
+                                       << " Val" << (pressed ? mapping.midiValueCCOn : mapping.midiValueCCOff));
                         }
                         if (!message.empty()) g_midiOut.sendMessage(&message);
                     }
@@ -1539,6 +1642,8 @@ int main() {
                                            (unsigned char)mapping.midiNoteOrCCNumber,
                                            (unsigned char)midiVal};
                                 g_midiOut.sendMessage(&message);
+                                LOG_DEBUG_S(mapping.control.name << ": CC Ch" << (channel+1)
+                                           << " CC" << mapping.midiNoteOrCCNumber << " Val" << midiVal);
                                 state.lastSentMidiValue = midiVal;
                             }
                         }
@@ -1564,7 +1669,9 @@ int main() {
     }
 
     std::cout << "\n\nExiting..." << std::endl;
+    LOG_INFO("Application shutting down");
     if (g_inputThread.joinable()) g_inputThread.join();
     if (g_midiOut.isPortOpen()) g_midiOut.closePort();
+    Logger::instance().shutdown();
     return 0;
 }
