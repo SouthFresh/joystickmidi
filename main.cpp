@@ -275,6 +275,97 @@ std::wstring StringToWString(const std::string& str) {
     return wstrTo;
 }
 
+// --- HID Usage Name Mapping ---
+// Maps HID Generic Desktop Page (0x01) usage codes to human-readable names
+std::string GetHidUsageName(USAGE usagePage, USAGE usage, bool isButton) {
+    if (isButton) {
+        // Button page (0x09) - just use "Button N"
+        return "Button " + std::to_string(usage);
+    }
+
+    // Generic Desktop Page (0x01) - common joystick/gamepad axes
+    if (usagePage == 0x01) {
+        switch (usage) {
+            case 0x30: return "X Axis";
+            case 0x31: return "Y Axis";
+            case 0x32: return "Z Axis";
+            case 0x33: return "Rx Axis";
+            case 0x34: return "Ry Axis";
+            case 0x35: return "Rz Axis";
+            case 0x36: return "Slider";
+            case 0x37: return "Dial";
+            case 0x38: return "Wheel";
+            case 0x39: return "Hat Switch";
+            case 0x3A: return "Counted Buffer";
+            case 0x3B: return "Byte Count";
+            case 0x3C: return "Motion Wakeup";
+            case 0x3D: return "Start";
+            case 0x3E: return "Select";
+            case 0x40: return "Vx";
+            case 0x41: return "Vy";
+            case 0x42: return "Vz";
+            case 0x43: return "Vbrx";
+            case 0x44: return "Vbry";
+            case 0x45: return "Vbrz";
+            case 0x46: return "Vno";
+            case 0x47: return "Feature Notification";
+            case 0x48: return "Resolution Multiplier";
+            default: break;
+        }
+    }
+
+    // Simulation Controls Page (0x02)
+    if (usagePage == 0x02) {
+        switch (usage) {
+            case 0xB0: return "Aileron";
+            case 0xB1: return "Aileron Trim";
+            case 0xB2: return "Anti-Torque Control";
+            case 0xB3: return "Autopilot Enable";
+            case 0xB4: return "Chaff Release";
+            case 0xB5: return "Collective Control";
+            case 0xB6: return "Dive Brake";
+            case 0xB7: return "Electronic Countermeasures";
+            case 0xB8: return "Elevator";
+            case 0xB9: return "Elevator Trim";
+            case 0xBA: return "Rudder";
+            case 0xBB: return "Throttle";
+            case 0xBC: return "Flight Communications";
+            case 0xBD: return "Flare Release";
+            case 0xBE: return "Landing Gear";
+            case 0xBF: return "Toe Brake";
+            case 0xC0: return "Trigger";
+            case 0xC1: return "Weapons Arm";
+            case 0xC2: return "Weapons Select";
+            case 0xC3: return "Wing Flaps";
+            case 0xC4: return "Accelerator";
+            case 0xC5: return "Brake";
+            case 0xC6: return "Clutch";
+            case 0xC7: return "Shifter";
+            case 0xC8: return "Steering";
+            case 0xC9: return "Turret Direction";
+            case 0xCA: return "Barrel Elevation";
+            case 0xCB: return "Dive Plane";
+            case 0xCC: return "Ballast";
+            case 0xCD: return "Bicycle Crank";
+            case 0xCE: return "Handle Bars";
+            case 0xCF: return "Front Brake";
+            case 0xD0: return "Rear Brake";
+            default: break;
+        }
+    }
+
+    // Fallback: show usage page and code
+    if (usagePage != 0x01 && usagePage != 0x09) {
+        return "Usage(P:0x" +
+               (std::ostringstream() << std::hex << std::setfill('0') << std::setw(2) << usagePage).str() +
+               ", U:0x" +
+               (std::ostringstream() << std::hex << std::setfill('0') << std::setw(2) << usage).str() + ")";
+    }
+
+    // Generic fallback for unknown usages on known pages
+    return "Axis " + std::to_string(usage);
+}
+
 // --- Windows Device/Control Logic ---
 std::vector<HidDeviceInfo> EnumerateHidDevices() {
     std::vector<HidDeviceInfo> hidDevices;
@@ -343,13 +434,13 @@ std::vector<ControlInfo> GetAvailableControls(PHIDP_PREPARSED_DATA pData, HIDP_C
                     for (USAGE u = bCaps.Range.UsageMin; u <= bCaps.Range.UsageMax; ++u) {
                         ControlInfo ctrl;
                         ctrl.isButton = true; ctrl.usagePage = bCaps.UsagePage; ctrl.usage = u;
-                        ctrl.name = "Button " + std::to_string(u);
+                        ctrl.name = GetHidUsageName(bCaps.UsagePage, u, true);
                         controls.push_back(ctrl);
                     }
                 } else {
                     ControlInfo ctrl;
                     ctrl.isButton = true; ctrl.usagePage = bCaps.UsagePage; ctrl.usage = bCaps.NotRange.Usage;
-                    ctrl.name = "Button " + std::to_string(bCaps.NotRange.Usage);
+                    ctrl.name = GetHidUsageName(bCaps.UsagePage, bCaps.NotRange.Usage, true);
                     controls.push_back(ctrl);
                 }
             }
@@ -367,14 +458,14 @@ std::vector<ControlInfo> GetAvailableControls(PHIDP_PREPARSED_DATA pData, HIDP_C
                         ControlInfo ctrl;
                         ctrl.isButton = false; ctrl.usagePage = vCaps.UsagePage; ctrl.usage = u;
                         ctrl.logicalMin = vCaps.LogicalMin; ctrl.logicalMax = vCaps.LogicalMax;
-                        ctrl.name = "Axis " + std::to_string(u);
+                        ctrl.name = GetHidUsageName(vCaps.UsagePage, u, false);
                         controls.push_back(ctrl);
                     }
                 } else {
                     ControlInfo ctrl;
                     ctrl.isButton = false; ctrl.usagePage = vCaps.UsagePage; ctrl.usage = vCaps.NotRange.Usage;
                     ctrl.logicalMin = vCaps.LogicalMin; ctrl.logicalMax = vCaps.LogicalMax;
-                    ctrl.name = "Axis " + std::to_string(vCaps.NotRange.Usage);
+                    ctrl.name = GetHidUsageName(vCaps.UsagePage, vCaps.NotRange.Usage, false);
                     controls.push_back(ctrl);
                 }
             }
@@ -911,11 +1002,16 @@ bool EditConfiguration(std::vector<ControlInfo>& available_controls) {
                         }
                         #endif
                     }
-                    std::cout << "[" << i << "] " << available_controls[i].name
-                              << (available_controls[i].isButton ? " (Button)" : " (Axis)")
-                              << (alreadyMapped ? " [MAPPED]" : "") << std::endl;
+                    const auto& ctrl = available_controls[i];
+                    std::cout << "[" << std::setw(2) << i << "] " << ctrl.name;
+                    if (ctrl.isButton) {
+                        std::cout << " (Button)";
+                    } else {
+                        std::cout << " (Axis/Value: " << ctrl.logicalMin << "-" << ctrl.logicalMax << ")";
+                    }
+                    std::cout << (alreadyMapped ? " [MAPPED]" : "") << std::endl;
                 }
-                std::cout << "[" << available_controls.size() << "] Cancel\n";
+                std::cout << "[" << std::setw(2) << available_controls.size() << "] Cancel\n";
 
                 std::cout << "\nSelect control to add: ";
                 int ctrl_choice = GetUserSelection(available_controls.size(), 0);
@@ -1207,9 +1303,14 @@ int main() {
                     }
                     #endif
                 }
-                std::cout << "[" << i << "] " << available_controls[i].name
-                          << (available_controls[i].isButton ? " (Button)" : " (Axis)")
-                          << (alreadyMapped ? " [MAPPED]" : "") << std::endl;
+                const auto& ctrl = available_controls[i];
+                std::cout << "[" << std::setw(2) << i << "] " << ctrl.name;
+                if (ctrl.isButton) {
+                    std::cout << " (Button)";
+                } else {
+                    std::cout << " (Axis/Value: " << ctrl.logicalMin << "-" << ctrl.logicalMax << ")";
+                }
+                std::cout << (alreadyMapped ? " [MAPPED]" : "") << std::endl;
             }
 
             std::cout << "\nSelect control to map (or " << available_controls.size() << " to finish adding): ";
@@ -1255,23 +1356,55 @@ int main() {
     } else { // Config was loaded
         #ifdef _WIN32
             // On Windows, we need to find the device and get its preparsed data
-            auto devices = EnumerateHidDevices();
             bool found = false;
-            for(auto& dev : devices) {
-                if (dev.path == g_currentConfig.hidDevicePath) {
-                    g_preparsedData = dev.preparsedData;
-                    dev.preparsedData = nullptr; // Prevent destructor from freeing it
-                    available_controls = GetAvailableControls(g_preparsedData, dev.caps);
-                    found = true;
-                    break;
+            while (!found && !g_quitFlag) {
+                auto devices = EnumerateHidDevices();
+                for(auto& dev : devices) {
+                    if (dev.path == g_currentConfig.hidDevicePath) {
+                        g_preparsedData = dev.preparsedData;
+                        dev.preparsedData = nullptr; // Prevent destructor from freeing it
+                        available_controls = GetAvailableControls(g_preparsedData, dev.caps);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    ClearScreen();
+                    std::cout << "--- Device Not Connected ---\n\n";
+                    std::cout << "The configured device was not found:\n";
+                    std::cout << "  " << g_currentConfig.hidDeviceName << "\n\n";
+                    std::cout << "Please connect the device and try again.\n\n";
+                    std::cout << "[0] Retry\n[1] Exit\n";
+                    int retryChoice = GetUserSelection(1, 0);
+                    if (g_quitFlag || retryChoice == 1) {
+                        return 1;
+                    }
                 }
             }
-            if (!found) {
-                std::cerr << "Configured HID device not found." << std::endl; return 1;
-            }
         #else
-            // On Linux, get available controls from device path
-            available_controls = GetAvailableControls(g_currentConfig.hidDevicePath);
+            // On Linux, check if device exists and get available controls
+            bool found = false;
+            while (!found && !g_quitFlag) {
+                if (fs::exists(g_currentConfig.hidDevicePath)) {
+                    available_controls = GetAvailableControls(g_currentConfig.hidDevicePath);
+                    if (!available_controls.empty()) {
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    ClearScreen();
+                    std::cout << "--- Device Not Connected ---\n\n";
+                    std::cout << "The configured device was not found:\n";
+                    std::cout << "  " << g_currentConfig.hidDeviceName << "\n";
+                    std::cout << "  (" << g_currentConfig.hidDevicePath << ")\n\n";
+                    std::cout << "Please connect the device and try again.\n\n";
+                    std::cout << "[0] Retry\n[1] Exit\n";
+                    int retryChoice = GetUserSelection(1, 0);
+                    if (g_quitFlag || retryChoice == 1) {
+                        return 1;
+                    }
+                }
+            }
         #endif
 
         // Ask if user wants to edit the configuration
