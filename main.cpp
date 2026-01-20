@@ -225,6 +225,7 @@ std::vector<fs::path> ListConfigurations(const std::string& directory);
 bool PerformCalibration(size_t mappingIndex);
 void ConfigureMappingMidi(ControlMapping& mapping, int defaultChannel);
 void InitializeMappingStates();
+bool EditConfiguration(std::vector<ControlInfo>& available_controls);
 
 // ===================================================================================
 //
@@ -840,6 +841,243 @@ int GetEffectiveChannel(const ControlMapping& mapping, int defaultChannel) {
     return (mapping.midiChannel >= 0) ? mapping.midiChannel : defaultChannel;
 }
 
+bool EditConfiguration(std::vector<ControlInfo>& available_controls) {
+    bool configModified = false;
+
+    while (!g_quitFlag) {
+        ClearScreen();
+        std::cout << "--- Edit Configuration ---\n";
+        std::cout << "Device: " << g_currentConfig.hidDeviceName << "\n";
+        std::cout << "Default MIDI Channel: " << (g_currentConfig.defaultMidiChannel + 1) << "\n";
+        std::cout << "Current mappings: " << g_currentConfig.mappings.size() << "\n\n";
+
+        // Display current mappings
+        if (!g_currentConfig.mappings.empty()) {
+            std::cout << "Mapped Controls:\n";
+            for (size_t i = 0; i < g_currentConfig.mappings.size(); ++i) {
+                const auto& m = g_currentConfig.mappings[i];
+                int ch = GetEffectiveChannel(m, g_currentConfig.defaultMidiChannel);
+                std::cout << "  " << (i + 1) << ". " << m.control.name
+                          << " -> Ch" << (ch + 1) << " "
+                          << (m.midiMessageType == MidiMessageType::NOTE_ON_OFF ? "Note" : "CC")
+                          << " " << m.midiNoteOrCCNumber << "\n";
+            }
+            std::cout << "\n";
+        }
+
+        std::cout << "Options:\n";
+        std::cout << "[0] Continue with current configuration\n";
+        std::cout << "[1] Add new control mapping\n";
+        if (!g_currentConfig.mappings.empty()) {
+            std::cout << "[2] Remove a control mapping\n";
+            std::cout << "[3] Edit a control mapping\n";
+        }
+        std::cout << "[4] Change default MIDI channel\n";
+        std::cout << "[5] Save configuration\n";
+
+        int maxOption = g_currentConfig.mappings.empty() ? 5 : 5;
+        int choice = GetUserSelection(maxOption, 0);
+        if (g_quitFlag) return false;
+
+        switch (choice) {
+            case 0: // Continue
+                return configModified;
+
+            case 1: { // Add new mapping
+                if (available_controls.empty()) {
+                    std::cout << "No controls available to add.\n";
+                    std::cout << "Press Enter to continue...";
+                    std::cin.get();
+                    break;
+                }
+
+                ClearScreen();
+                std::cout << "--- Add Control Mapping ---\n\n";
+                std::cout << "Available Controls:\n";
+                for (size_t i = 0; i < available_controls.size(); ++i) {
+                    bool alreadyMapped = false;
+                    for (const auto& m : g_currentConfig.mappings) {
+                        #ifdef _WIN32
+                        if (m.control.usagePage == available_controls[i].usagePage &&
+                            m.control.usage == available_controls[i].usage) {
+                            alreadyMapped = true;
+                            break;
+                        }
+                        #else
+                        if (m.control.eventType == available_controls[i].eventType &&
+                            m.control.eventCode == available_controls[i].eventCode) {
+                            alreadyMapped = true;
+                            break;
+                        }
+                        #endif
+                    }
+                    std::cout << "[" << i << "] " << available_controls[i].name
+                              << (available_controls[i].isButton ? " (Button)" : " (Axis)")
+                              << (alreadyMapped ? " [MAPPED]" : "") << std::endl;
+                }
+                std::cout << "[" << available_controls.size() << "] Cancel\n";
+
+                std::cout << "\nSelect control to add: ";
+                int ctrl_choice = GetUserSelection(available_controls.size(), 0);
+                if (g_quitFlag) return false;
+
+                if (ctrl_choice < (int)available_controls.size()) {
+                    ControlMapping newMapping;
+                    newMapping.control = available_controls[ctrl_choice];
+                    g_currentConfig.mappings.push_back(newMapping);
+                    InitializeMappingStates();
+
+                    size_t mappingIdx = g_currentConfig.mappings.size() - 1;
+                    ConfigureMappingMidi(g_currentConfig.mappings[mappingIdx], g_currentConfig.defaultMidiChannel);
+
+                    // Calibrate axis controls
+                    if (!newMapping.control.isButton &&
+                        g_currentConfig.mappings[mappingIdx].midiMessageType == MidiMessageType::CC) {
+                        PerformCalibration(mappingIdx);
+                    }
+                    configModified = true;
+                }
+                break;
+            }
+
+            case 2: { // Remove mapping
+                if (g_currentConfig.mappings.empty()) {
+                    std::cout << "No mappings to remove.\n";
+                    std::cout << "Press Enter to continue...";
+                    std::cin.get();
+                    break;
+                }
+
+                ClearScreen();
+                std::cout << "--- Remove Control Mapping ---\n\n";
+                for (size_t i = 0; i < g_currentConfig.mappings.size(); ++i) {
+                    const auto& m = g_currentConfig.mappings[i];
+                    int ch = GetEffectiveChannel(m, g_currentConfig.defaultMidiChannel);
+                    std::cout << "[" << i << "] " << m.control.name
+                              << " -> Ch" << (ch + 1) << " "
+                              << (m.midiMessageType == MidiMessageType::NOTE_ON_OFF ? "Note" : "CC")
+                              << " " << m.midiNoteOrCCNumber << "\n";
+                }
+                std::cout << "[" << g_currentConfig.mappings.size() << "] Cancel\n";
+
+                std::cout << "\nSelect mapping to remove: ";
+                int removeChoice = GetUserSelection(g_currentConfig.mappings.size(), 0);
+                if (g_quitFlag) return false;
+
+                if (removeChoice < (int)g_currentConfig.mappings.size()) {
+                    std::cout << "Remove '" << g_currentConfig.mappings[removeChoice].control.name << "'? [0] No  [1] Yes\n";
+                    if (GetUserSelection(1, 0) == 1) {
+                        g_currentConfig.mappings.erase(g_currentConfig.mappings.begin() + removeChoice);
+                        InitializeMappingStates();
+                        configModified = true;
+                        std::cout << "Mapping removed.\n";
+                    }
+                }
+                break;
+            }
+
+            case 3: { // Edit mapping
+                if (g_currentConfig.mappings.empty()) {
+                    std::cout << "No mappings to edit.\n";
+                    std::cout << "Press Enter to continue...";
+                    std::cin.get();
+                    break;
+                }
+
+                ClearScreen();
+                std::cout << "--- Edit Control Mapping ---\n\n";
+                for (size_t i = 0; i < g_currentConfig.mappings.size(); ++i) {
+                    const auto& m = g_currentConfig.mappings[i];
+                    int ch = GetEffectiveChannel(m, g_currentConfig.defaultMidiChannel);
+                    std::cout << "[" << i << "] " << m.control.name
+                              << " -> Ch" << (ch + 1) << " "
+                              << (m.midiMessageType == MidiMessageType::NOTE_ON_OFF ? "Note" : "CC")
+                              << " " << m.midiNoteOrCCNumber << "\n";
+                }
+                std::cout << "[" << g_currentConfig.mappings.size() << "] Cancel\n";
+
+                std::cout << "\nSelect mapping to edit: ";
+                int editChoice = GetUserSelection(g_currentConfig.mappings.size(), 0);
+                if (g_quitFlag) return false;
+
+                if (editChoice < (int)g_currentConfig.mappings.size()) {
+                    auto& mapping = g_currentConfig.mappings[editChoice];
+
+                    ClearScreen();
+                    std::cout << "--- Edit: " << mapping.control.name << " ---\n\n";
+                    std::cout << "What would you like to edit?\n";
+                    std::cout << "[0] Cancel\n";
+                    std::cout << "[1] MIDI settings (type, channel, note/CC number)\n";
+                    if (!mapping.control.isButton && mapping.midiMessageType == MidiMessageType::CC) {
+                        std::cout << "[2] Recalibrate axis\n";
+                        std::cout << "[3] Toggle reverse axis (currently: " << (mapping.reverseAxis ? "Yes" : "No") << ")\n";
+                    }
+
+                    int maxEditOption = (!mapping.control.isButton && mapping.midiMessageType == MidiMessageType::CC) ? 3 : 1;
+                    int editOption = GetUserSelection(maxEditOption, 0);
+                    if (g_quitFlag) return false;
+
+                    switch (editOption) {
+                        case 1: // MIDI settings
+                            ConfigureMappingMidi(mapping, g_currentConfig.defaultMidiChannel);
+                            configModified = true;
+                            break;
+                        case 2: // Recalibrate
+                            if (!mapping.control.isButton && mapping.midiMessageType == MidiMessageType::CC) {
+                                PerformCalibration(editChoice);
+                                configModified = true;
+                            }
+                            break;
+                        case 3: // Toggle reverse
+                            if (!mapping.control.isButton && mapping.midiMessageType == MidiMessageType::CC) {
+                                mapping.reverseAxis = !mapping.reverseAxis;
+                                std::cout << "Reverse axis: " << (mapping.reverseAxis ? "Yes" : "No") << "\n";
+                                configModified = true;
+                            }
+                            break;
+                    }
+                }
+                break;
+            }
+
+            case 4: { // Change default MIDI channel
+                ClearScreen();
+                std::cout << "--- Change Default MIDI Channel ---\n\n";
+                std::cout << "Current default channel: " << (g_currentConfig.defaultMidiChannel + 1) << "\n";
+                std::cout << "Enter new default MIDI Channel (1-16): ";
+                int newChannel = GetUserSelection(16, 1) - 1;
+                if (g_quitFlag) return false;
+                g_currentConfig.defaultMidiChannel = newChannel;
+                configModified = true;
+                std::cout << "Default channel updated to " << (newChannel + 1) << "\n";
+                break;
+            }
+
+            case 5: { // Save configuration
+                ClearScreen();
+                std::cout << "--- Save Configuration ---\n\n";
+                std::cout << "Enter filename to save (e.g., my_joystick.hidmidi.json): ";
+                std::string saveFilename;
+                std::getline(std::cin, saveFilename);
+                if (!saveFilename.empty()) {
+                    if (!string_ends_with(saveFilename, CONFIG_EXTENSION)) {
+                        saveFilename += CONFIG_EXTENSION;
+                    }
+                    if (SaveConfiguration(g_currentConfig, saveFilename)) {
+                        std::cout << "Configuration saved to " << saveFilename << "\n";
+                        configModified = false;  // Reset since we saved
+                    }
+                }
+                std::cout << "Press Enter to continue...";
+                std::cin.get();
+                break;
+            }
+        }
+    }
+
+    return configModified;
+}
+
 // ===================================================================================
 //
 // MAIN APPLICATION
@@ -1023,6 +1261,7 @@ int main() {
                 if (dev.path == g_currentConfig.hidDevicePath) {
                     g_preparsedData = dev.preparsedData;
                     dev.preparsedData = nullptr; // Prevent destructor from freeing it
+                    available_controls = GetAvailableControls(g_preparsedData, dev.caps);
                     found = true;
                     break;
                 }
@@ -1030,11 +1269,49 @@ int main() {
             if (!found) {
                 std::cerr << "Configured HID device not found." << std::endl; return 1;
             }
+        #else
+            // On Linux, get available controls from device path
+            available_controls = GetAvailableControls(g_currentConfig.hidDevicePath);
         #endif
 
-        // Initialize mapping states
+        // Ask if user wants to edit the configuration
+        std::cout << "\nOptions:\n[0] Run with current configuration\n[1] Edit configuration\n";
+        int editChoice = GetUserSelection(1, 0);
+        if (g_quitFlag) return 1;
+
+        // Initialize mapping states and start input thread
         InitializeMappingStates();
         g_inputThread = std::thread(InputMonitorLoop);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Let thread start
+
+        if (editChoice == 1) {
+            bool modified = EditConfiguration(available_controls);
+
+            if (g_currentConfig.mappings.empty()) {
+                std::cerr << "No controls mapped. Exiting." << std::endl;
+                g_quitFlag = true;
+                if (g_inputThread.joinable()) g_inputThread.join();
+                return 1;
+            }
+
+            // Prompt to save if modified
+            if (modified) {
+                std::cout << "\nConfiguration was modified. Save changes? [0] No  [1] Yes\n";
+                if (GetUserSelection(1, 0) == 1) {
+                    std::cout << "Enter filename to save (e.g., my_joystick.hidmidi.json): ";
+                    std::string saveFilename;
+                    std::getline(std::cin, saveFilename);
+                    if (!saveFilename.empty()) {
+                        if (!string_ends_with(saveFilename, CONFIG_EXTENSION)) {
+                            saveFilename += CONFIG_EXTENSION;
+                        }
+                        if (SaveConfiguration(g_currentConfig, saveFilename)) {
+                            std::cout << "Configuration saved to " << saveFilename << std::endl;
+                        }
+                    }
+                }
+            }
+        }
 
         unsigned int portCount = g_midiOut.getPortCount();
         int midi_port = -1;
