@@ -742,17 +742,45 @@ int GetUserSelection(int maxValidChoice, int minValidChoice) {
     }
 }
 
+// Track the starting cursor position for monitoring output
+#ifdef _WIN32
+static COORD g_monitoringStartPos = {0, 0};
+static bool g_monitoringPosInitialized = false;
+#else
+static int g_monitoringLineCount = 0;
+#endif
+
 void DisplayMonitoringOutput() {
     std::lock_guard<std::mutex> lock(g_consoleMutex);
     const int BAR_WIDTH = 20;
-    std::stringstream ss;
 
-    // Move cursor to beginning and display all mappings
-    ss << "\r";
+#ifdef _WIN32
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+
+    // Initialize starting position on first call
+    if (!g_monitoringPosInitialized) {
+        GetConsoleScreenBufferInfo(hConsole, &csbi);
+        g_monitoringStartPos = csbi.dwCursorPosition;
+        g_monitoringPosInitialized = true;
+    }
+
+    // Move cursor to starting position
+    SetConsoleCursorPosition(hConsole, g_monitoringStartPos);
+#else
+    // On Linux, move cursor up by the number of mappings we printed last time
+    if (g_monitoringLineCount > 0) {
+        std::cout << "\033[" << g_monitoringLineCount << "A";
+    }
+    g_monitoringLineCount = static_cast<int>(g_currentConfig.mappings.size());
+#endif
+
+    // Display each mapping on its own line (vertical layout)
     for (size_t i = 0; i < g_currentConfig.mappings.size() && i < g_mappingStates.size(); ++i) {
         const auto& mapping = g_currentConfig.mappings[i];
         const auto& state = g_mappingStates[i];
 
+        std::stringstream ss;
         std::string shortName = mapping.control.name.substr(0, 12);
         ss << "[" << std::left << std::setw(12) << shortName << "] ";
 
@@ -784,13 +812,21 @@ void DisplayMonitoringOutput() {
 
             ss << "|" << bar << empty << "| " << std::fixed << std::setprecision(0) << std::setw(3) << percentage << "%";
         }
-        ss << "  ";
+
+        // Pad with spaces to clear any leftover characters, then newline
+        std::string line = ss.str();
+        line.append(20, ' ');
+
+#ifdef _WIN32
+        // On Windows, use carriage return to overwrite line, then move to next line
+        std::cout << "\r" << line << std::endl;
+#else
+        // On Linux, clear line and print
+        std::cout << "\033[2K" << line << std::endl;
+#endif
     }
 
-    // Pad with spaces to clear any leftover characters
-    std::string outputStr = ss.str();
-    outputStr.append(20, ' ');
-    std::cout << outputStr << std::flush;
+    std::cout << std::flush;
 }
 
 bool SaveConfiguration(const MidiMappingConfig& config, const std::string& filename) {
@@ -1590,6 +1626,13 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "MIDI Port: " << g_currentConfig.midiDeviceName << std::endl;
     std::cout << "(Press Enter to exit on Linux, or close window)\n\n";
+
+    // Reset monitoring display position tracking
+#ifdef _WIN32
+    g_monitoringPosInitialized = false;
+#else
+    g_monitoringLineCount = 0;
+#endif
 
     auto lastDisplayTime = std::chrono::steady_clock::now();
     while (!g_quitFlag) {
